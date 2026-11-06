@@ -6,4 +6,8 @@ cp -r assets classes/
 mkdir -p ../build
 jar --create --file ../build/FemCraftInstaller.jar --main-class femboys.are.cute.installer.Main -C classes .
 rm -rf classes
-echo "Built ../build/FemCraftInstaller.jar"
+cd ../build || exit 1
+rm -f FemCraftInstaller-Windows.zip FemCraftInstaller-Other.zip
+zip -q FemCraftInstaller-Windows.zip FemCraftInstaller.jar FemCraftInstaller.bat
+zip -q FemCraftInstaller-Other.zip FemCraftInstaller.jar FemCraftInstaller.sh
+echo "Built FemCraftInstaller.jar, FemCraftInstaller-Windows.zip and FemCraftInstaller-Other.zip"

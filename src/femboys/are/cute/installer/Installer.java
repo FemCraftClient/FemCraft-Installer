@@ -34,6 +34,8 @@ import java.util.zip.ZipFile;
 public final class Installer {
 
     public static final String MANIFEST = "femcraft-installer.json";
+    private static final String OPTIONS = "options.txt";
+    private static final Set<String> OPTION_KEYS = Set.of("resourcePacks", "incompatibleResourcePacks");
     private static final Pattern DRIVE = Pattern.compile("^[A-Za-z]:.*");
     private static final Set<String> HOSTS = Set.of("cdn.modrinth.com", "github.com", "raw.githubusercontent.com", "gitlab.com");
 
@@ -50,6 +52,7 @@ public final class Installer {
         public final boolean cheats;
         final Map<String, Object> files;
         final String versionDir;
+        public final boolean legacy;
 
         Installed(Map<String, Object> m) {
             versionId = Json.str(m, "versionId");
@@ -59,6 +62,7 @@ public final class Installer {
             Map<String, Object> f = Json.obj(m, "files");
             files = f == null ? new LinkedHashMap<>() : f;
             versionDir = Json.str(m, "versionDir");
+            legacy = "v1".equals(Json.str(m, "edition"));
         }
     }
 
@@ -88,13 +92,13 @@ public final class Installer {
     public Installer(Target target, Remote.PackVersion pack, boolean cheats, byte[] icon, Listener listener) {
         this.target = target;
         this.pack = pack;
-        this.cheats = cheats;
+        this.cheats = cheats && !pack.legacy;
         this.icon = icon;
         this.listener = listener;
     }
 
-    public static Installed installed(Target t, String mc) {
-        Path m = t.gameDir(mc).resolve(MANIFEST);
+    public static Installed installed(Target t, Remote.PackVersion p) {
+        Path m = t.gameDir(p.instance()).resolve(MANIFEST);
         if (!Files.isRegularFile(m)) return null;
         try {
             return new Installed(Json.obj(Json.parse(Files.readString(m, StandardCharsets.UTF_8))));
@@ -128,7 +132,7 @@ public final class Installer {
 
     public void run() throws Exception {
         String mc = pack.minecraft;
-        Path game = target.gameDir(mc);
+        Path game = target.gameDir(pack.instance());
         Files.createDirectories(game);
         if (target.kind == Target.Kind.MINECRAFT && runningLauncher() != null) {
             throw new IOException("Please close the Minecraft Launcher first, then try again.");
@@ -147,14 +151,15 @@ public final class Installer {
     }
 
     private void install(String mc, Path game, Path staging) throws Exception {
-        listener.status("Downloading FemCraft " + pack.number);
+        listener.status("Downloading " + pack.label());
         listener.progress(-1);
         Path mrpack = staging.resolve("pack.mrpack");
         Http.download(pack.url, mrpack, pack.sha1, pack.sha512, null);
 
-        Installed old = installed(target, mc);
+        Installed old = installed(target, pack);
         Map<String, Item> plan = new LinkedHashMap<>();
         String loader;
+        String packOptions = null;
 
         try (ZipFile zip = new ZipFile(mrpack.toFile(), StandardCharsets.UTF_8)) {
             ZipEntry ie = zip.getEntry("modrinth.index.json");
@@ -171,7 +176,10 @@ public final class Installer {
             String packMc = Json.str(deps, "minecraft");
             loader = Json.str(deps, "fabric-loader");
             if (loader == null) throw new IOException("This installer only supports Fabric modpacks");
-            if (packMc != null && !packMc.equals(mc)) throw new IOException("Modpack is for Minecraft " + packMc + ", expected " + mc);
+            if (packMc != null && !packMc.equals(mc)) {
+                if (!pack.legacy) throw new IOException("Modpack is for Minecraft " + packMc + ", expected " + mc);
+                mc = packMc;
+            }
 
             for (Object o : Json.arr(index, "files")) {
                 Map<String, Object> f = Json.obj(o);
@@ -205,6 +213,12 @@ public final class Installer {
                     if (e.isDirectory() || !e.getName().startsWith(prefix)) continue;
                     String path = safe(e.getName().substring(prefix.length()));
                     if (path.isEmpty()) continue;
+                    if (path.equals(OPTIONS)) {
+                        try (InputStream in = zip.getInputStream(e)) {
+                            packOptions = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                        }
+                        continue;
+                    }
                     Item it = new Item(path);
                     it.zipEntry = e.getName();
                     Path out = staging.resolve("zip").resolve(path);
@@ -231,14 +245,16 @@ public final class Installer {
             plan.put(addon.path, addon);
         }
 
-        listener.status("Checking for the newest FemCraft build");
         Path latest = staging.resolve("latest-" + Remote.CLIENT_JAR);
-        boolean haveLatest;
-        try {
-            Http.download(Remote.updateUrl(mc, Remote.CLIENT_JAR), latest, null, null, null);
-            haveLatest = isJar(latest);
-        } catch (Http.NotFound e) {
-            haveLatest = false;
+        boolean haveLatest = false;
+        if (!pack.legacy) {
+            listener.status("Checking for the newest FemCraft build");
+            try {
+                Http.download(Remote.updateUrl(mc, Remote.CLIENT_JAR), latest, null, null, null);
+                haveLatest = isJar(latest);
+            } catch (Http.NotFound e) {
+                haveLatest = false;
+            }
         }
         if (haveLatest) {
             Item client = null;
@@ -356,7 +372,7 @@ public final class Installer {
         }
 
         for (String rel : oldFiles.keySet()) {
-            if (plan.containsKey(rel)) continue;
+            if (plan.containsKey(rel) || rel.equals(OPTIONS)) continue;
             try {
                 Files.deleteIfExists(game.resolve(safe(rel)));
             } catch (IOException ignored) {
@@ -373,6 +389,8 @@ public final class Installer {
             files.put(it.path, it.sha1);
         }
 
+        if (packOptions != null) mergeOptions(game.resolve(OPTIONS), packOptions);
+
         String versionDir = null;
         if (target.kind == Target.Kind.MINECRAFT) {
             listener.status("Setting up Fabric " + loader);
@@ -383,7 +401,7 @@ public final class Installer {
             writeProfiles(game, Target.versionId(mc));
         } else if (target.kind == Target.Kind.INSTANCES) {
             listener.status("Creating launcher instance");
-            target.writeInstance(mc, loader, icon);
+            target.writeInstance(pack.instance(), mc, loader, icon);
         }
 
         Map<String, Object> man = new LinkedHashMap<>();
@@ -391,6 +409,7 @@ public final class Installer {
         man.put("project", Remote.PROJECT);
         man.put("versionId", pack.id);
         man.put("versionNumber", pack.number);
+        man.put("edition", pack.legacy ? "v1" : "v2");
         man.put("minecraft", mc);
         man.put("loader", loader);
         man.put("cheats", cheats);
@@ -399,6 +418,27 @@ public final class Installer {
         man.put("files", files);
         writeAtomic(game.resolve(MANIFEST), Json.write(man));
         listener.progress(1);
+    }
+
+    static void mergeOptions(Path file, String packOptions) throws IOException {
+        Map<String, String> wanted = new LinkedHashMap<>();
+        for (String line : packOptions.split("\\r?\\n")) {
+            int c = line.indexOf(':');
+            if (c <= 0) continue;
+            String key = line.substring(0, c);
+            if (OPTION_KEYS.contains(key)) wanted.put(key, line);
+        }
+        if (wanted.isEmpty()) return;
+        List<String> lines = Files.isRegularFile(file) ? new ArrayList<>(Files.readAllLines(file, StandardCharsets.UTF_8)) : new ArrayList<>();
+        for (int k = 0; k < lines.size(); k++) {
+            String line = lines.get(k);
+            int c = line.indexOf(':');
+            if (c <= 0) continue;
+            String repl = wanted.remove(line.substring(0, c));
+            if (repl != null) lines.set(k, repl);
+        }
+        lines.addAll(wanted.values());
+        writeAtomic(file, String.join("\n", lines) + "\n");
     }
 
     private void tick(Item it) {
@@ -445,7 +485,7 @@ public final class Installer {
             p.put("icon", iconData);
             p.put("lastUsed", now);
             p.put("lastVersionId", versionId);
-            p.put("name", "FemCraft");
+            p.put("name", pack.legacy ? "FemCraft V1" : "FemCraft");
             p.put("type", "custom");
             p.remove("gameDir");
             profiles.put("femcraft", p);

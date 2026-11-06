@@ -169,6 +169,14 @@ public final class Ui {
             int lh = fm.getHeight();
             int y = (getHeight() - lh * lines.length) / 2 + fm.getAscent();
             for (String l : lines) {
+                if (size < 30f) {
+                    Graphics2D sh = (Graphics2D) g2.create();
+                    sh.setComposite(AlphaComposite.SrcOver.derive(Math.max(0f, Math.min(1f, alpha * base * 0.22f))));
+                    sh.setColor(new Color(10, 30, 50));
+                    int[][] offs = {{0, 1}, {1, 1}, {-1, 1}, {0, 2}, {1, 2}, {-1, 2}, {0, 0}};
+                    for (int[] o : offs) centered(sh, l, getWidth() / 2 + o[0], y + o[1]);
+                    sh.dispose();
+                }
                 centered(g2, l, getWidth() / 2, y);
                 y += lh;
             }
@@ -290,7 +298,7 @@ public final class Ui {
     }
 
     public static final class Selector extends Fade {
-        private final String label;
+        private String label;
         private final List<String> values = new ArrayList<>();
         private int index;
         private IntConsumer onChange;
@@ -348,6 +356,11 @@ public final class Ui {
             values.clear();
             values.addAll(v);
             index = Math.max(0, Math.min(selected, v.size() - 1));
+            repaint();
+        }
+
+        public void label(String l) {
+            label = l;
             repaint();
         }
 

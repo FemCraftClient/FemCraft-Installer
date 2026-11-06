@@ -30,8 +30,10 @@ public final class Remote {
         public final String sha1;
         public final String sha512;
         public final long size;
+        public final boolean legacy;
 
-        PackVersion(String id, String number, String name, String minecraft, String url, String sha1, String sha512, long size) {
+        PackVersion(String id, String number, String name, String minecraft, String url, String sha1, String sha512, long size, boolean legacy) {
+            this.legacy = legacy;
             this.id = id;
             this.number = number;
             this.name = name;
@@ -41,13 +43,36 @@ public final class Remote {
             this.sha512 = sha512;
             this.size = size;
         }
+
+        public String instance() {
+            return legacy ? "FemCraft V1" : "FemCraft " + minecraft;
+        }
+
+        public String label() {
+            return legacy ? "FemCraft V1 " + number : "FemCraft " + number;
+        }
     }
 
-    public static List<PackVersion> packVersions() throws IOException {
+    public static final class Packs {
+        public final List<PackVersion> v2;
+        public final List<PackVersion> v1;
+
+        Packs(List<PackVersion> v2, List<PackVersion> v1) {
+            this.v2 = v2;
+            this.v1 = v1;
+        }
+    }
+
+    public static boolean isLegacy(String number) {
+        return number != null && number.startsWith("1.");
+    }
+
+    public static Packs packVersions() throws IOException {
         String loaders = URLEncoder.encode("[\"fabric\"]", StandardCharsets.UTF_8);
         Object res = Http.json("https://api.modrinth.com/v2/project/" + PROJECT + "/version?include_changelog=false&loaders=" + loaders);
         Map<String, PackVersion> best = new LinkedHashMap<>();
         Map<String, Integer> rank = new LinkedHashMap<>();
+        List<PackVersion> legacy = new ArrayList<>();
         for (Object o : Json.arr(res)) {
             Map<String, Object> v = Json.obj(o);
             String status = Json.str(v, "status");
@@ -61,6 +86,19 @@ public final class Remote {
             if (file == null) continue;
             Map<String, Object> hashes = Json.obj(file, "hashes");
             String type = Json.str(v, "version_type");
+            String number = Json.str(v, "version_number");
+            if (isLegacy(number)) {
+                String mc = null;
+                for (Object g : Json.arr(v, "game_versions")) {
+                    String gv = String.valueOf(g);
+                    if (mc == null || compareVersions(gv, mc) > 0) mc = gv;
+                }
+                if (mc == null) continue;
+                legacy.add(new PackVersion(Json.str(v, "id"), number, Json.str(v, "name"), mc, Json.str(file, "url"),
+                        hashes == null ? null : Json.str(hashes, "sha1"), hashes == null ? null : Json.str(hashes, "sha512"),
+                        Json.num(file, "size", 0), true));
+                continue;
+            }
             int r = "release".equals(type) ? 0 : "beta".equals(type) ? 1 : 2;
             for (Object g : Json.arr(v, "game_versions")) {
                 String mc = String.valueOf(g);
@@ -75,12 +113,14 @@ public final class Remote {
                         Json.str(file, "url"),
                         hashes == null ? null : Json.str(hashes, "sha1"),
                         hashes == null ? null : Json.str(hashes, "sha512"),
-                        Json.num(file, "size", 0)));
+                        Json.num(file, "size", 0),
+                        false));
             }
         }
         List<PackVersion> out = new ArrayList<>(best.values());
         out.sort(Comparator.comparing((PackVersion p) -> p.minecraft, Remote::compareVersions).reversed());
-        return out;
+        legacy.sort(Comparator.comparing((PackVersion p) -> p.number, Remote::compareVersions).reversed());
+        return new Packs(out, legacy);
     }
 
     public static int compareVersions(String a, String b) {

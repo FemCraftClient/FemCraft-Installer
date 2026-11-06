@@ -29,21 +29,18 @@ public final class Target {
         this.instances = instances;
     }
 
-    public static String instanceName(String mc) {
-        return "FemCraft " + mc;
-    }
 
     public static String versionId(String mc) {
         return "FemCraft-" + mc;
     }
 
-    public Path instanceDir(String mc) {
-        return instances.resolve(instanceName(mc));
+    public Path instanceDir(String name) {
+        return instances.resolve(name);
     }
 
-    public Path gameDir(String mc) {
+    public Path gameDir(String name) {
         if (kind != Kind.INSTANCES) return root;
-        Path inst = instanceDir(mc);
+        Path inst = instanceDir(name);
         if (Files.isDirectory(inst.resolve("minecraft")) && !Files.isDirectory(inst.resolve(".minecraft"))) {
             return inst.resolve("minecraft");
         }
@@ -53,7 +50,7 @@ public final class Target {
     public String hint() {
         switch (kind) {
             case MINECRAFT: return "Installs into " + root + ". Other mods are moved to a backup folder.";
-            case INSTANCES: return "Creates the instance \"FemCraft <version>\" in " + label + ".";
+            case INSTANCES: return "Creates the instance \"<instance>\" in " + label + ".";
             default: return "Installs mods and configs only. Fabric must already be set up for this folder.";
         }
     }
@@ -190,14 +187,14 @@ public final class Target {
         return p.isAbsolute() ? p : root.resolve(p);
     }
 
-    public void writeInstance(String mc, String loader, byte[] icon) throws IOException {
-        Path inst = instanceDir(mc);
+    public void writeInstance(String name, String mc, String loader, byte[] icon) throws IOException {
+        Path inst = instanceDir(name);
         Files.createDirectories(inst);
         Path cfg = inst.resolve("instance.cfg");
         List<String> lines = Files.exists(cfg) ? new ArrayList<>(Files.readAllLines(cfg, StandardCharsets.UTF_8)) : new ArrayList<>();
         Map<String, String> want = new LinkedHashMap<>();
         want.put("InstanceType", "OneSix");
-        want.put("name", instanceName(mc));
+        want.put("name", name);
         want.put("iconKey", "femcraft");
         for (int k = 0; k < lines.size(); k++) {
             String l = lines.get(k);

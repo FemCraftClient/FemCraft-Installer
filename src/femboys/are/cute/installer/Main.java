@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class Main {
 
-    public static final String VERSION = "1.0.0";
+    public static final String VERSION = "1.1";
     private static final int W = 1047;
     private static final int H = 581;
 
@@ -37,34 +37,38 @@ public final class Main {
     private final Ui.Text load = new Ui.Text("Just getting a few things ready", 48f, false, 1f);
 
     private final Ui.Text title = new Ui.Text("FemCraft Client", 48f, false, 1f);
+    private final Ui.Selector edition = new Ui.Selector("EDITION");
     private final Ui.Selector launcher = new Ui.Selector("LAUNCHER");
     private final Ui.Selector version = new Ui.Selector("MINECRAFT");
     private final Ui.Text status = new Ui.Text("", 16f, false, 1f);
-    private final Ui.Text hint = new Ui.Text("", 13f, false, 0.7f);
+    private final Ui.Text hint = new Ui.Text("", 14f, false, 0.95f);
     private final Ui.Check cheats = new Ui.Check("Enable Cheats");
-    private final Ui.Text cheatHint = new Ui.Text("", 13f, false, 0.7f);
+    private final Ui.Text cheatHint = new Ui.Text("", 14f, false, 0.95f);
     private final Ui.Button install = new Ui.Button("Install", null);
     private final Ui.Group main = new Ui.Group();
 
     private final Ui.Text working = new Ui.Text("", 48f, false, 1f);
-    private final Ui.Text step = new Ui.Text("", 16f, false, 0.8f);
+    private final Ui.Text step = new Ui.Text("", 18f, false, 1f);
     private final Ui.Bar bar = new Ui.Bar();
     private final Ui.Group progress = new Ui.Group();
 
-    private final Ui.Text done = new Ui.Text("Ok. I am finished installing.", 48f, false, 1f);
-    private final Ui.Text doneHint = new Ui.Text("", 16f, false, 0.8f);
-    private final Ui.Button close = new Ui.Button("Close Installer", () -> System.exit(0));
+    private final Ui.Text done = new Ui.Text("Ok. FemCraft is installed.", 48f, false, 1f);
+    private final Ui.Text doneHint = new Ui.Text("", 18f, false, 1f);
+    private final Ui.Button close = new Ui.Button("Close", () -> System.exit(0));
     private final Ui.Button back = new Ui.Button("Back", null);
     private final Ui.Group finish = new Ui.Group();
 
     private final Ui.Text error = new Ui.Text("Something went wrong.", 48f, false, 1f);
-    private final Ui.Text errorText = new Ui.Text("", 16f, false, 0.85f);
+    private final Ui.Text errorText = new Ui.Text("", 17f, false, 1f);
     private final Ui.Button retry = new Ui.Button("Retry", null);
     private final Ui.Button errorClose = new Ui.Button("Close", () -> System.exit(0));
     private final Ui.Group failed = new Ui.Group();
 
     private final List<Target> targets = new ArrayList<>();
+    private Remote.Packs all = null;
     private List<Remote.PackVersion> packs = new ArrayList<>();
+    private final List<Boolean> editions = new ArrayList<>();
+    private final String[] args;
     private List<String> meteor = new ArrayList<>();
     private volatile byte[] icon;
     private Clip clip;
@@ -78,7 +82,11 @@ public final class Main {
         } catch (Exception ignored) {
         }
         Ui.loadFonts();
-        SwingUtilities.invokeLater(() -> new Main().start());
+        SwingUtilities.invokeLater(() -> new Main(args).start());
+    }
+
+    private Main(String[] args) {
+        this.args = args == null ? new String[0] : args;
     }
 
     private void start() {
@@ -99,15 +107,16 @@ public final class Main {
         place(intro, 0, top, W, 70);
         place(load, 0, top, W, 70);
 
-        place(title, 0, 50, W, 70);
-        place(launcher, W / 2 - 300, 140, 600, 64);
-        place(version, W / 2 - 300, 222, 600, 64);
-        place(status, 60, 300, W - 120, 26);
-        place(hint, 60, 326, W - 120, 22);
-        place(cheats, W / 2 - 200, 372, 400, 30);
-        place(cheatHint, 60, 404, W - 120, 22);
-        place(install, W / 2 - 110, 452, 220, 54);
-        main.add(title, launcher, version, status, hint, cheats, cheatHint, install);
+        place(title, 0, 30, W, 70);
+        place(edition, W / 2 - 300, 108, 600, 58);
+        place(launcher, W / 2 - 300, 172, 600, 58);
+        place(version, W / 2 - 300, 236, 600, 58);
+        place(status, 60, 304, W - 120, 26);
+        place(hint, 60, 328, W - 120, 22);
+        place(cheats, W / 2 - 200, 366, 400, 30);
+        place(cheatHint, 60, 398, W - 120, 22);
+        place(install, W / 2 - 110, 446, 220, 54);
+        main.add(title, edition, launcher, version, status, hint, cheatHint, install);
 
         place(working, 0, top, W, 70);
         place(step, 60, top + 92, W - 120, 26);
@@ -139,6 +148,11 @@ public final class Main {
 
         place(spinner, W - 90, H - 90, 40, 40);
 
+        edition.onChange(i -> {
+            applyEdition(0);
+            refresh();
+            cheats.fade(legacy() ? 0f : 1f, 300, null);
+        });
         launcher.onChange(i -> refresh());
         launcher.onValueClick(this::chooseFolderIfNeeded);
         version.onChange(i -> refresh());
@@ -146,7 +160,7 @@ public final class Main {
         install.action(this::doInstall);
         back.action(() -> finish.fade(0f, 600, () -> {
             refresh();
-            main.fade(1f, 800, null);
+            showMainGroup();
         }));
 
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -187,13 +201,14 @@ public final class Main {
     private void fetch(Object[] failure, Runnable after) {
         logPath = null;
         new Thread(() -> {
+            if (SelfUpdate.launch(args)) System.exit(0);
             String err = null;
-            List<Remote.PackVersion> p = null;
+            Remote.Packs p = null;
             List<String> m = null;
             List<Target> t = null;
             try {
                 p = Remote.packVersions();
-                if (p.isEmpty()) err = "No FemCraft versions found on Modrinth.";
+                if (p.v2.isEmpty() && p.v1.isEmpty()) err = "No FemCraft versions found on Modrinth.";
                 m = Remote.meteorVersions();
                 t = Target.detect();
             } catch (Exception e) {
@@ -202,13 +217,13 @@ public final class Main {
             }
             if (err != null && logPath == null) logPath = ErrorLog.write(err, null, null);
             String fe = err;
-            List<Remote.PackVersion> fp = p;
+            Remote.Packs fp = p;
             List<String> fm = m;
             List<Target> ft = t;
             SwingUtilities.invokeLater(() -> {
                 failure[0] = fe;
                 if (fe == null) {
-                    packs = fp;
+                    all = fp;
                     meteor = fm;
                     targets.clear();
                     targets.addAll(ft);
@@ -229,26 +244,62 @@ public final class Main {
     }
 
     private void showMain() {
-        List<String> mcs = new ArrayList<>();
-        for (Remote.PackVersion p : packs) mcs.add(p.minecraft);
+        editions.clear();
+        List<String> names = new ArrayList<>();
+        if (!all.v2.isEmpty()) {
+            editions.add(false);
+            names.add("FemCraft V2");
+        }
+        if (!all.v1.isEmpty()) {
+            editions.add(true);
+            names.add("FemCraft V1 (unsupported)");
+        }
+        boolean selLegacy = editions.get(0);
         int sel = 0;
+        search:
         for (Target t : targets) {
-            boolean found = false;
-            for (int k = 0; k < packs.size(); k++) {
-                Installer.Installed in = Installer.installed(t, packs.get(k).minecraft);
-                if (in != null && packs.get(k).minecraft.equals(in.minecraft)) {
+            for (int k = 0; k < all.v2.size(); k++) {
+                Installer.Installed in = Installer.installed(t, all.v2.get(k));
+                if (in != null && !in.legacy && all.v2.get(k).minecraft.equals(in.minecraft)) {
+                    selLegacy = false;
                     sel = k;
-                    found = true;
-                    break;
+                    break search;
                 }
             }
-            if (found) break;
+            for (int k = 0; k < all.v1.size(); k++) {
+                Installer.Installed in = Installer.installed(t, all.v1.get(k));
+                if (in != null && in.legacy && all.v1.get(k).id.equals(in.versionId)) {
+                    selLegacy = true;
+                    sel = k;
+                    break search;
+                }
+            }
         }
-        version.values(mcs, sel);
+        edition.values(names, Math.max(0, editions.indexOf(selLegacy)));
+        applyEdition(sel);
         launcherValues(0);
         refresh();
         spinner.fade(0f, 600, null);
+        showMainGroup();
+    }
+
+    private boolean legacy() {
+        return !editions.isEmpty() && editions.get(Math.min(edition.index(), editions.size() - 1));
+    }
+
+    private void applyEdition(int selected) {
+        boolean v1 = legacy();
+        packs = v1 ? all.v1 : all.v2;
+        List<String> vals = new ArrayList<>();
+        for (Remote.PackVersion p : packs) vals.add(v1 ? p.number + "  \u00b7  Minecraft " + p.minecraft : p.minecraft);
+        version.label(v1 ? "VERSION" : "MINECRAFT");
+        cheatHint.setBounds(60, v1 ? 372 : 398, W - 120, 22);
+        version.values(vals, selected);
+    }
+
+    private void showMainGroup() {
         main.fade(1f, 1000, null);
+        if (!legacy()) cheats.fade(1f, 1000, null);
     }
 
     private void launcherValues(int selected) {
@@ -284,7 +335,7 @@ public final class Main {
     private void refresh() {
         Target t = target();
         Remote.PackVersion p = pack();
-        boolean meteorOk = meteor.contains(p.minecraft);
+        boolean meteorOk = !p.legacy && meteor.contains(p.minecraft);
         cheats.allow(meteorOk);
         if (t == null) {
             status.set("Click above to choose a folder");
@@ -295,28 +346,34 @@ public final class Main {
             return;
         }
         install.allow(true);
-        hint.set(t.hint().replace("<version>", p.minecraft));
-        Installer.Installed in = Installer.installed(t, p.minecraft);
+        hint.set(t.hint().replace("<instance>", p.instance()));
+        Installer.Installed in = Installer.installed(t, p);
+        String have = in == null ? null : (in.legacy ? "FemCraft V1 " : "FemCraft ") + in.versionNumber;
         if (in == null) {
-            status.set("Not installed \u00b7 FemCraft " + p.number);
+            status.set("Not installed \u00b7 " + p.label());
+            install.set("Install");
+        } else if (in.legacy != p.legacy || (p.legacy && !p.id.equals(in.versionId))) {
+            status.set("Installed \u00b7 " + have + " \u00b7 switches to " + p.label());
             install.set("Install");
         } else if (!p.minecraft.equals(in.minecraft)) {
             status.set("Installed for Minecraft " + in.minecraft + " \u00b7 switches to " + p.minecraft);
             install.set("Install");
         } else if (p.id.equals(in.versionId)) {
-            status.set("Installed \u00b7 FemCraft " + in.versionNumber + " \u00b7 up to date");
+            status.set("Installed \u00b7 " + have + " \u00b7 up to date");
             install.set("Update");
         } else {
-            status.set("Installed \u00b7 FemCraft " + in.versionNumber + " \u00b7 update to " + p.number + " available");
+            status.set("Installed \u00b7 " + have + " \u00b7 update to " + p.number + " available");
             install.set("Update");
         }
-        if (meteorOk) cheats.set(in != null && p.minecraft.equals(in.minecraft) && in.cheats);
+        if (meteorOk) cheats.set(in != null && !in.legacy && p.minecraft.equals(in.minecraft) && in.cheats);
         refreshCheatHint();
     }
 
     private void refreshCheatHint() {
         Remote.PackVersion p = pack();
-        if (meteor.isEmpty()) {
+        if (p.legacy) {
+            cheatHint.set("FemCraft V1 is unsupported and no longer receives updates or fixes.");
+        } else if (meteor.isEmpty()) {
             cheatHint.set("Meteor Client could not be reached right now.");
         } else if (!meteor.contains(p.minecraft)) {
             cheatHint.set("Meteor Client is not available for Minecraft " + p.minecraft + ".");
@@ -334,11 +391,12 @@ public final class Main {
             return;
         }
         Remote.PackVersion p = pack();
-        boolean ch = cheats.checked();
+        boolean ch = cheats.checked() && !p.legacy;
         boolean update = "Update".equals(statusIsUpdate(t, p));
-        working.set(update ? "Updating FemCraft " + p.number : "Installing FemCraft " + p.number);
+        working.set((update ? "Updating " : "Installing ") + p.label());
         step.set("");
         bar.set(-1);
+        cheats.fade(0f, 600, null);
         main.fade(0f, 600, () -> {
             spinner.fade(1f, 600, null);
             progress.fade(1f, 800, null);
@@ -363,9 +421,9 @@ public final class Main {
                     Map<String, Object> ctx = new LinkedHashMap<>();
                     ctx.put("Launcher", t.label + " (" + t.kind + ")");
                     ctx.put("Launcher folder", t.root);
-                    ctx.put("Game folder", t.gameDir(p.minecraft));
+                    ctx.put("Game folder", t.gameDir(p.instance()));
                     ctx.put("Minecraft", p.minecraft);
-                    ctx.put("FemCraft", p.number + " (" + p.id + ")");
+                    ctx.put("FemCraft", p.label() + " (" + p.id + ")");
                     ctx.put("Cheats", ch);
                     ctx.put("Step", lastStep);
                     logPath = ErrorLog.write(message(e), ctx, e);
@@ -376,11 +434,11 @@ public final class Main {
                     if (f != null) {
                         showError(message(f), () -> failed.fade(0f, 600, () -> {
                             refresh();
-                            main.fade(1f, 800, null);
+                            showMainGroup();
                         }));
                     } else {
-                        done.set(update ? "Ok. I am finished updating." : "Ok. I am finished installing.");
-                        doneHint.set(startHint(t, p.minecraft));
+                        done.set(update ? "Ok. FemCraft is up to date." : "Ok. FemCraft is installed.");
+                        doneHint.set(startHint(t, p));
                         done.fade(1f, 1000, () -> new Timer(1200, e -> {
                             ((Timer) e.getSource()).stop();
                             doneHint.fade(1f, 800, null);
@@ -394,14 +452,16 @@ public final class Main {
     }
 
     private static String statusIsUpdate(Target t, Remote.PackVersion p) {
-        Installer.Installed in = Installer.installed(t, p.minecraft);
-        return in != null && p.minecraft.equals(in.minecraft) ? "Update" : "Install";
+        Installer.Installed in = Installer.installed(t, p);
+        if (in == null || in.legacy != p.legacy) return "Install";
+        if (p.legacy) return p.id.equals(in.versionId) ? "Update" : "Install";
+        return p.minecraft.equals(in.minecraft) ? "Update" : "Install";
     }
 
-    private static String startHint(Target t, String mc) {
+    private static String startHint(Target t, Remote.PackVersion p) {
         switch (t.kind) {
-            case MINECRAFT: return "Open your launcher and start the profile \"FemCraft\" (version " + Target.versionId(mc) + ").";
-            case INSTANCES: return "Open " + t.label + " and start the instance \"" + Target.instanceName(mc) + "\".";
+            case MINECRAFT: return "Open your launcher and start the profile \"" + (p.legacy ? "FemCraft V1" : "FemCraft") + "\" (version " + Target.versionId(p.minecraft) + ").";
+            case INSTANCES: return "Open " + t.label + " and start the instance \"" + p.instance() + "\".";
             default: return "FemCraft was installed into " + t.root + ".";
         }
     }
