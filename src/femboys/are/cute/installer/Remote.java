@@ -102,12 +102,16 @@ public final class Remote {
             int r = "release".equals(type) ? 0 : "beta".equals(type) ? 1 : 2;
             for (Object g : Json.arr(v, "game_versions")) {
                 String mc = String.valueOf(g);
-                Integer have = rank.get(mc);
-                if (have != null && have <= r) continue;
+                PackVersion cur = best.get(mc);
+                if (cur != null) {
+                    int cr = rank.get(mc);
+                    if (cr < r) continue;
+                    if (cr == r && compareVersions(number, cur.number) <= 0) continue;
+                }
                 rank.put(mc, r);
                 best.put(mc, new PackVersion(
                         Json.str(v, "id"),
-                        Json.str(v, "version_number"),
+                        number,
                         Json.str(v, "name"),
                         mc,
                         Json.str(file, "url"),
